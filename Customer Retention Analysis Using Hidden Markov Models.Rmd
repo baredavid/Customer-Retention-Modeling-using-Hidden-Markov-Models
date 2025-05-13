@@ -1,0 +1,216 @@
+---
+title: "Customer Retention Analysis Using Hidden Markov Models"
+author: "David Bare"
+date: "2025-04-14"
+output:
+  html_document: default
+  word_document: default
+---
+
+```{r}
+# Clear workspace and load necessary libraries
+rm(list=ls())  # Clear the workspace of any existing objects
+library(data.table)  # Load data.table for efficient data manipulation
+library(foreign)  # Load foreign for reading data from other statistical systems
+library(stringr)  # Load stringr for string manipulation
+library(lubridate)  # Load lubridate for working with dates and times
+library(ggplot2)  # Load ggplot2 for data visualization
+library(lfe)  # Load lfe for linear regression with fixed effects
+library(dplyr)  # Load dplyr for data manipulation
+library(stargazer)  # Load stargazer for creating publication-quality tables
+library(haven)  # Load haven for importing SAS, SPSS, and Stata files
+library(depmixS4)  # Load depmixS4 for Hidden Markov Models
+```
+# Exploring the Effect of Online Channels and Billpay on Customer Retention Using Markov Models
+
+In this project, we are exploring the effect of online channels and billpay on customer retention using Markov models. Specifically, we are using Hidden Markov Models (HMMs) to understand how these factors influence customer retention over time.
+
+Our choice to use a Hidden Markov Model (HMM) for this problem is appropriate for several reasons:
+
+We are assuming that customer behavior over time represents sequential data where customer interactions with online channels and billpay services occur chronologically. HMMs are well-suited for modeling sequential data where the order of events matters. We are also assuming that temporal dependencies exist, and HMMs can capture these dependencies between customer actions at different time points (e.g., 1999 and 2000).
+
+Regarding hidden states, customer retention is not directly observable but can be inferred from observable behaviors like using online services or billpay. HMMs allow us to model these hidden states (retention) based on observable actions. Additionally, there might be latent factors influencing retention that are not directly measurable, and HMMs can help uncover these hidden states.
+
+Within this probabilistic framework, HMMs provide a structure that can handle uncertainty in customer behavior, modeling the likelihood of different states and transitions between them. They can estimate the probability of transitioning from one state to another (e.g., from using online services to retaining as a customer).
+
+For observable events, customer actions like using online channels or billpay services are directly measurable and can be used to infer the hidden states of retention. HMMs can model the probability of observing certain actions given a particular hidden state through emission probabilities.
+
+The flexibility of HMMs allows handling multiple hidden states, enabling a more nuanced understanding of customer retention. For example, we can have states like "high retention," "moderate retention," and "low retention." HMMs can adapt to different types of data and can be extended to include more observable variables if needed.
+
+Regarding predictive power, once the HMM is trained, it can be used to predict future states based on new observable data, helping in forecasting customer retention. By understanding the transitions and emissions, we can design interventions to improve retention.
+
+As an example scenario, imagine having data on whether customers used online services and billpay in 1999 and 2000, and wanting to understand how these actions relate to customer retention. The hidden states would be the retention status of customers, while the observable events would be whether customers used online services or billpay. Transitions would represent the probability of a customer moving from one retention state to another based on their actions, and emissions would be the probability of observing certain actions given the retention state.
+
+By fitting an HMM to this data, we can infer the most likely retention states for customers based on their observable actions, understand the transition probabilities between retention states, and identify which observable actions are most strongly associated with retention.
+
+# Data Preparation
+```{r}
+# Set working directory
+setwd("C:/Users/FIRELINKS/Documents/Academic Staff/MSBA/Customer Relationship Management and Data Mining/Session 7")
+
+# Load the dataset
+df <- read.csv("pilgrim.csv")
+
+# Create variables for missing X0Online and X0Billpay
+df$X0OnlineNA <- ifelse(is.na(df$X0Online), 0, df$X0Online)
+df$X0BillpayNA <- ifelse(is.na(df$X0Billpay), 0, df$X0Billpay)
+
+# Create Retain variable
+df$Retain <- ifelse(is.na(df$X0Profit), 0, 1)
+
+# Prepare data for HMM
+group <- df[, c("X9Online", "X9Billpay", "X0OnlineNA", "X0BillpayNA", "Retain")]
+
+# Convert variables to factors for categorical treatment
+group$X9Online <- factor(ifelse(is.na(group$X9Online), 0, group$X9Online), levels = c(0, 1), labels = c("No", "Yes"))
+group$X9Billpay <- factor(ifelse(is.na(group$X9Billpay), 0, group$X9Billpay), levels = c(0, 1), labels = c("No", "Yes"))
+group$X0OnlineNA <- factor(group$X0OnlineNA, levels = c(0, 1), labels = c("No", "Yes"))
+group$X0BillpayNA <- factor(group$X0BillpayNA, levels = c(0, 1), labels = c("No", "Yes"))
+group$Retain <- factor(group$Retain, levels = c(0, 1), labels = c("Left", "Stayed"))
+
+# Check for NA/NaN/Inf in the data
+cat("Checking for NA values:\n")
+print(colSums(is.na(group)))
+cat("Data summary:\n")
+summary(group)
+
+# Verify factor levels
+cat("Factor levels:\n")
+lapply(group, levels)
+```
+
+
+#  Fit Hidden Markov Model
+
+```{r}
+# Fit a single Hidden Markov Model (HMM) with categorical variables and meaningful state labels
+set.seed(1)  # Set seed for reproducibility of results
+
+# Use tryCatch to handle potential errors during model fitting
+tryCatch({
+  # Define the HMM using depmixS4
+  # - response: Specify each variable (X9Online, X9Billpay, X0OnlineNA, X0BillpayNA, Retain) as a response with no predictors (~ 1)
+  # - data: Use the 'group' dataframe containing the factor variables
+  # - nstates: Set to 4 states to capture different customer behavior patterns
+  # - family: Use multinomial("identity") for all variables, as they are binary categorical factors (No/Yes, Left/Stayed)
+  model <- depmix(
+    response = list(
+      X9Online ~ 1,      # 1999 online channel usage (No/Yes)
+      X9Billpay ~ 1,     # 1999 billpay usage (No/Yes)
+      X0OnlineNA ~ 1,    # 2000 online channel usage, NA imputed (No/Yes)
+      X0BillpayNA ~ 1,   # 2000 billpay usage, NA imputed (No/Yes)
+      Retain ~ 1         # Retention status (Left/Stayed)
+    ),
+    data = group,        # Dataframe with preprocessed factor variables
+    nstates = 4,         # Number of hidden states
+    family = list(
+      multinomial("identity"),  # Multinomial for binary X9Online
+      multinomial("identity"),  # Multinomial for binary X9Billpay
+      multinomial("identity"),  # Multinomial for binary X0OnlineNA
+      multinomial("identity"),  # Multinomial for binary X0BillpayNA
+      multinomial("identity")   # Multinomial for binary Retain
+    )
+  )
+  
+  # Fit the HMM model
+  # - verbose = TRUE prints iteration details to help diagnose convergence issues
+  fit_model <- fit(model, verbose = TRUE)
+  
+  # Extract the most likely hidden state sequence for each observation
+  hidden_states <- posterior(fit_model)$state
+  
+  # Extract emission probabilities for each state
+  # - Emission probabilities define P(variable = category | state), e.g., P(X9Online = Yes | State i)
+  # - start_idx = 17 is based on depmixS4's parameter structure (after initial probs and transitions)
+  start_idx <- 17
+  emission_probs <- list()
+  for (i in 1:4) {
+    # Get probabilities for the current state (10 values: 5 variables * 2 levels each)
+    probs <- getpars(fit_model)[start_idx:(start_idx + 9)]
+    # Organize into a matrix: rows = variables, columns = categories (No/Left, Yes/Stayed)
+    emission_probs[[i]] <- matrix(probs, nrow = 5, byrow = TRUE,
+                                  dimnames = list(
+                                    c("X9Online", "X9Billpay", "X0OnlineNA", "X0BillpayNA", "Retain"),
+                                    c("No/Left", "Yes/Stayed")
+                                  ))
+    start_idx <- start_idx + 10  # Move to next state's parameters
+  }
+  
+  # Assign meaningful state labels based on emission probabilities
+  # - Labels reflect retention, online usage, and billpay adoption
+  state_labels <- character(4)
+  for (i in 1:4) {
+    probs <- emission_probs[[i]]
+    # Determine retention status
+    # - If P(Retain = Stayed) > 0.5, customer is likely retained
+    retain_prob <- probs["Retain", "Yes/Stayed"]
+    retain_status <- ifelse(retain_prob > 0.5, "Retained", "Non-Retained")
+    
+    # Determine online status across 1999 and 2000
+    # - Compare X9Online (1999) and X0OnlineNA (2000) to detect adoption or dropout
+    online_99 <- probs["X9Online", "Yes/Stayed"] > 0.5
+    online_00 <- probs["X0OnlineNA", "Yes/Stayed"] > 0.5
+    online_status <- if (online_99 && online_00) {
+      "Online"           # Online in both years
+    } else if (!online_99 && !online_00) {
+      "Offline"          # Offline in both years
+    } else if (online_00) {
+      "Adopted Online"   # Offline in 1999, online in 2000
+    } else {
+      "Dropped Online"   # Online in 1999, offline in 2000
+    }
+    
+    # Determine billpay status
+    # - Check if billpay is used in either 1999 or 2000
+    billpay_99 <- probs["X9Billpay", "Yes/Stayed"] > 0.5
+    billpay_00 <- probs["X0BillpayNA", "Yes/Stayed"] > 0.5
+    billpay_status <- if (billpay_99 || billpay_00) "+Billpay" else ""
+    
+    # Combine components into a descriptive label
+    state_labels[i] <- paste(retain_status, online_status, billpay_status, sep = " ")
+    state_labels[i] <- trimws(state_labels[i])  # Remove extra spaces
+    # Rename "Adopted Online" to "Newly Online" for clarity
+    if (state_labels[i] == "Retained Adopted Online") {
+      state_labels[i] <- "Retained Newly Online"
+    }
+  }
+  
+  # Ensure labels are unique to avoid confusion in the transition matrix
+  # - Append numbers if duplicates occur (rare but possible)
+  if (length(unique(state_labels)) < 4) {
+    state_labels <- paste(state_labels, 1:4, sep = "_")
+  }
+  
+  # Print emission probabilities to show each state's characteristics
+  # - Rounded to 3 decimal places for readability
+  cat("Emission probabilities for each hidden state:\n")
+  for (i in 1:4) {
+    cat(sprintf("State %d: %s\n", i, state_labels[i]))
+    print(round(emission_probs[[i]], 3))
+    cat("\n")
+  }
+  
+  # Print transition matrix with meaningful state labels
+  # - Matrix shows P(transition from state i to state j)
+  cat("Transition matrix:\n")
+  trans_matrix <- matrix(getpars(fit_model)[1:16], nrow = 4, byrow = TRUE)
+  dimnames(trans_matrix) <- list(state_labels, state_labels)  # Apply descriptive labels
+  print(round(trans_matrix, 3))
+  
+  # Question 8: Reprint transition matrix to address online and billpay effects
+  # - Same matrix, repeated for context of evaluating retention
+  cat("\nTransition matrix (Question 8):\n")
+  print(round(trans_matrix, 3))
+  
+}, error = function(e) {
+  # Handle errors gracefully and provide guidance
+  cat("Error in fitting HMM:", conditionMessage(e), "\n")
+  cat("Possible issues: missing data, low variability, or model complexity.\n")
+  cat("Please check 'group' dataframe with summary(group) and ensure no NA values.\n")
+})
+```
+
+Billpay’s Limited Impact: Billpay in 1999 aids retention in State 2, but low stability (13.2% self-transition) and high churn in States 3, 4 suggest it’s not a strong driver.
+Online Adoption: State 2’s online adoption correlates with retention, but not sustainably.
+Strategy: Enhance billpay’s value (e.g., incentives) for online adopters (State 2) and investigate other retention drivers (e.g., tenure, satisfaction).
+
